@@ -218,10 +218,24 @@ def attach_diff(ev, name, inp, cwd):
     ev["dhidden"] = max(0, len(dl) - MAX_DIFF_LINES)
 
 
+def clean_result(text):
+    """Strip harness wrappers from tool output.
+
+    <persisted-output> wraps large outputs saved to disk (the inner preview text is
+    what the terminal shows); <system-reminder> blocks are model-directed and hidden —
+    unless the result was ONLY a reminder (e.g. a short warning), which we surface.
+    """
+    reminders = [m.strip() for m in SYSTEM_REMINDER_RE.findall(text)]
+    stripped = PERSISTED_OUTPUT_RE.sub("", SYSTEM_REMINDER_RE.sub("", text)).strip()
+    if not stripped and reminders:
+        stripped = "\n".join(reminders)
+    return stripped
+
+
 def result_text(content):
     """tool_result content may be a string or a list of blocks."""
     if isinstance(content, str):
-        return content
+        return clean_result(content)
     if isinstance(content, list):
         parts = []
         for b in content:
@@ -234,7 +248,7 @@ def result_text(content):
                 kb = round(len(src.get("data", "")) * 3 / 4 / 1024)
                 media = src.get("media_type", "image")
                 parts.append(f"[Image: {media}{f' · {kb} KB' if kb else ''}]")
-        return "\n".join(parts)
+        return clean_result("\n".join(parts))
     return ""
 
 
@@ -251,7 +265,8 @@ COMMAND_ARGS_RE = re.compile(r"<command-args>(.*?)</command-args>", re.S)
 BASH_INPUT_RE = re.compile(r"<bash-input>(.*?)</bash-input>", re.S)
 BASH_STDOUT_RE = re.compile(r"<bash-stdout>(.*?)</bash-stdout>", re.S)
 BASH_STDERR_RE = re.compile(r"<bash-stderr>(.*?)</bash-stderr>", re.S)
-SYSTEM_REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
+SYSTEM_REMINDER_RE = re.compile(r"<system-reminder>(.*?)</system-reminder>", re.S)
+PERSISTED_OUTPUT_RE = re.compile(r"</?persisted-output>\s*")
 TEAMMATE_RE = re.compile(r"<teammate-message\b([^>]*)>(.*?)</teammate-message>", re.S)
 TEAMMATE_ID_RE = re.compile(r"(?:teammate|teamate)[_-]?id\s*=\s*[\"']?([^\"'\s>]+)")
 NOTIF_SUMMARY_RE = re.compile(r"<summary>(.*?)</summary>", re.S)
