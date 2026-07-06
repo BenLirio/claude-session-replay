@@ -142,6 +142,7 @@ const VERBS = ['Pondering','Simmering','Brewing','Percolating','Noodling','Mulli
 const GLYPHS = ['·','✢','✳','✻','✽','✻','✳','✢'];
 
 let idx = 0, playing = true, speedIdx = 0, runId = 0, autoscroll = true;
+let prefilledAt = -1;  // event index whose prompt is staged in the input box, awaiting play
 const CANCEL = Symbol('cancel');
 
 // navigation is in units of user prompts, not raw events — that's what demos skip between
@@ -258,6 +259,15 @@ function spinnerOff(){
 }
 
 async function typeUser(ev, token){
+  if (prefilledAt === idx){  // prompt was staged by a seek — send it, don't retype it
+    prefilledAt = -1;
+    typedEl.textContent = ev.text;
+    await wait(400, token);
+    typedEl.textContent = '';
+    addUser(ev.text);
+    await wait(250, token);
+    return;
+  }
   typedEl.textContent = '';
   const text = ev.text;
   const per = Math.min(45, Math.max(6, 1400 / text.length));
@@ -286,7 +296,7 @@ async function animate(ev, prev, token){
   // pause between events, matching the recording's rhythm (capped so demos stay snappy)
   const realGap = (prev && ev.ts && prev.ts) ? Math.max(0, ev.ts - prev.ts) : 0;
   if (ev.k === 'user'){
-    if (prev) await wait(Math.min(realGap, 1.2) * 1000, token);
+    if (prefilledAt !== idx && prev) await wait(Math.min(realGap, 1.2) * 1000, token);
     await typeUser(ev, token);
     return;
   }
@@ -354,6 +364,7 @@ async function runLoop(){
 function seekTo(n, keepPlaying){
   runId++;
   spinnerOff();
+  prefilledAt = -1;
   typedEl.textContent = '';
   scrollEl.innerHTML = '';
   addWelcome();
@@ -366,27 +377,39 @@ function seekTo(n, keepPlaying){
   if (playing && idx < EVENTS.length){
     toggleEl.textContent = '❚❚';
     setTimeout(runLoop, 0);
+  } else if (!playing){
+    toggleEl.textContent = '▶';
   }
 }
 
 function updateUI(){
-  const p = promptPos();
+  const p = displayPos();
   barEl.value = p;
   countEl.textContent = 'prompt ' + p + '/' + PROMPTS.length;
 }
-// seeking always lands with the prompt already submitted (visible in the transcript),
-// so a presenter jumps straight to Claude's response — never to an empty input box
-function seekToPrompt(p){  // p=0 → very start; p=k → just after prompt k was sent
-  seekTo(p <= 0 ? 0 : PROMPTS[Math.min(p, PROMPTS.length) - 1] + 1);
+function displayPos(){  // prompt number shown to the user; a staged prompt counts as current
+  return promptPos() + (prefilledAt === idx ? 1 : 0);
+}
+// Skipping to a checkpoint stages it for presenting: everything before the prompt is
+// rendered, the prompt text sits filled-in in the input box, and playback pauses —
+// the presenter talks over it, then hits play to send it and show the response.
+function seekToPrompt(p){
+  p = Math.max(0, Math.min(p, PROMPTS.length));
+  if (p === 0){ seekTo(0, false); return; }
+  const target = PROMPTS[p - 1];
+  seekTo(target, false);
+  typedEl.textContent = EVENTS[target].text;
+  prefilledAt = target;
+  updateUI();
 }
 function nextPrompt(){
-  const next = PROMPTS.find(i => i >= idx);
-  seekTo(next !== undefined ? next + 1 : EVENTS.length);
+  const p = displayPos();
+  if (p >= PROMPTS.length) seekTo(EVENTS.length, false);
+  else seekToPrompt(p + 1);
 }
 function prevPrompt(){
-  // mid-turn → back to the start of the current turn; at a turn's start → previous turn
-  const before = PROMPTS.filter(i => i + 1 < idx);
-  seekTo(before.length ? before[before.length - 1] + 1 : 0);
+  // mid-turn → re-stage the current turn's prompt; at a staged prompt → previous one
+  seekToPrompt(promptPos());
 }
 
 /* ---------- controls ---------- */

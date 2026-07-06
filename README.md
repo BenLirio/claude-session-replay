@@ -48,7 +48,9 @@ it, commit it, or host it as static content.
 
 Navigation is **by user prompt** — the slider snaps to prompts (one tick per prompt)
 and the counter reads `prompt 3/10`, so skipping to "the part where I asked X" is one
-click.
+click. Skipping stages the checkpoint for presenting: the prompt appears filled-in in
+the input box with playback paused — talk over it, then press play to send it and
+watch the response.
 
 | Control | Action |
 |---|---|

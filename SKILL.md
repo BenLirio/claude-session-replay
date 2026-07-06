@@ -49,7 +49,8 @@ Claude run is too slow or unpredictable.
 ## Viewer controls (tell the user)
 
 - Navigation is by **user prompt**: ‹/› buttons or ←/→ jump between prompts, the
-  slider snaps to prompts, and the counter shows `prompt 3/10`
+  slider snaps to prompts, and the counter shows `prompt 3/10`. Skipping pauses with
+  the prompt staged in the input box — press play to send it and show the response
 - Space / button: play–pause · `s` or button: speed 1×/2×/4×/8× · `r`: restart ·
   `e`: skip to end
 - Long waits from the recording are compressed so the demo stays snappy, while the
