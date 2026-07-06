@@ -188,6 +188,62 @@ COMMAND_ARGS_RE = re.compile(r"<command-args>(.*?)</command-args>", re.S)
 BASH_INPUT_RE = re.compile(r"<bash-input>(.*?)</bash-input>", re.S)
 BASH_STDOUT_RE = re.compile(r"<bash-stdout>(.*?)</bash-stdout>", re.S)
 BASH_STDERR_RE = re.compile(r"<bash-stderr>(.*?)</bash-stderr>", re.S)
+SYSTEM_REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
+TEAMMATE_RE = re.compile(r"<teammate-message\b([^>]*)>(.*?)</teammate-message>", re.S)
+TEAMMATE_ID_RE = re.compile(r"(?:teammate|teamate)[_-]?id\s*=\s*[\"']?([^\"'\s>]+)")
+NOTIF_SUMMARY_RE = re.compile(r"<summary>(.*?)</summary>", re.S)
+
+
+def user_text_events(text, ts):
+    """Classify one user-entry text into replay events.
+
+    Claude Code injects harness messages (task notifications, teammate messages,
+    system reminders, slash-command echoes, `!` shell passthrough) as user-type
+    entries; replaying them verbatim would show raw XML being "typed" by the user.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    if "<local-command-stdout>" in text or "<local-command-caveat>" in text:
+        return []
+    text = SYSTEM_REMINDER_RE.sub("", text).strip()
+    if not text:
+        return []
+    if text.startswith("[Request interrupted"):
+        return [{"k": "int", "ts": ts}]
+
+    m = BASH_INPUT_RE.search(text)
+    if m:
+        return [{"k": "user", "text": "! " + m.group(1).strip(), "ts": ts}]
+    if "<bash-stdout>" in text or "<bash-stderr>" in text:
+        so = BASH_STDOUT_RE.search(text)
+        se = BASH_STDERR_RE.search(text)
+        parts = [x.group(1).strip() for x in (so, se) if x and x.group(1).strip()]
+        if not parts:
+            return []
+        res, hidden = truncate_block("\n".join(parts))
+        err = bool(se and se.group(1).strip()) and not (so and so.group(1).strip())
+        return [{"k": "sh", "res": res, "hidden": hidden, "err": err, "ts": ts}]
+
+    m = COMMAND_RE.search(text)
+    if m:
+        args = COMMAND_ARGS_RE.search(text)
+        cmd = (m.group(1).strip() + " " + (args.group(1).strip() if args else "")).strip()
+        return [{"k": "user", "text": cmd, "ts": ts}] if cmd else []
+
+    events = []
+    for m in TEAMMATE_RE.finditer(text):
+        sender = TEAMMATE_ID_RE.search(m.group(1))
+        events.append({"k": "team", "from": sender.group(1) if sender else "teammate",
+                       "text": clean_text(m.group(2).strip())[:MAX_TEXT_CHARS], "ts": ts})
+    if events:
+        return events
+    if "<task-notification>" in text:
+        m = NOTIF_SUMMARY_RE.search(text)
+        summary = clean_text(m.group(1).strip()) if m else "Background task completed"
+        return [{"k": "notice", "text": one_line(summary, 160), "ts": ts}]
+
+    return [{"k": "user", "text": clean_text(text)[:MAX_TEXT_CHARS], "ts": ts}]
 
 
 def parse_session(path):
@@ -231,31 +287,7 @@ def parse_session(path):
                 if o.get("isMeta"):
                     continue
                 if isinstance(content, str):
-                    text = content
-                    if "<local-command-stdout>" in text or "<local-command-caveat>" in text:
-                        continue
-                    # `!` shell passthrough: the command is a user event, its output a dim block
-                    m = BASH_INPUT_RE.search(text)
-                    if m:
-                        events.append({"k": "user", "text": "! " + m.group(1).strip(), "ts": ts})
-                        continue
-                    if "<bash-stdout>" in text or "<bash-stderr>" in text:
-                        so = BASH_STDOUT_RE.search(text)
-                        se = BASH_STDERR_RE.search(text)
-                        parts = [x.group(1).strip() for x in (so, se) if x and x.group(1).strip()]
-                        if parts:
-                            res, hidden = truncate_block("\n".join(parts))
-                            err = bool(se and se.group(1).strip()) and not (so and so.group(1).strip())
-                            events.append({"k": "sh", "res": res, "hidden": hidden, "err": err, "ts": ts})
-                        continue
-                    m = COMMAND_RE.search(text)
-                    if m:
-                        cmd = m.group(1).strip()
-                        args = COMMAND_ARGS_RE.search(text)
-                        args = args.group(1).strip() if args else ""
-                        text = (cmd + " " + args).strip()
-                    if text.strip():
-                        events.append({"k": "user", "text": clean_text(text.strip())[:MAX_TEXT_CHARS], "ts": ts})
+                    events.extend(user_text_events(content, ts))
                 elif isinstance(content, list):
                     for b in content:
                         if not isinstance(b, dict):
@@ -270,11 +302,11 @@ def parse_session(path):
                                 if ts and ev["ts"]:
                                     ev["dur"] = max(0, ts - ev["ts"])
                         elif b.get("type") == "text":
-                            text = b.get("text", "").strip()
-                            if text.startswith("[Request interrupted"):
-                                events.append({"k": "int", "ts": ts})
-                            elif text and not text.startswith("<"):
-                                events.append({"k": "user", "text": text[:MAX_TEXT_CHARS], "ts": ts})
+                            for e in user_text_events(b.get("text", ""), ts):
+                                # block texts are usually harness-injected; only keep
+                                # ones we classified or that read as a real prompt
+                                if e["k"] != "user" or not e["text"].startswith("<"):
+                                    events.append(e)
 
             elif t == "assistant":
                 if msg.get("model"):
