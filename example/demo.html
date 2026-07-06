@@ -75,12 +75,14 @@
 
   .inputwrap{flex:0 0 auto;padding:0 14px 4px}
   .inputbox{
-    border:1px solid #3a3d45;border-radius:6px;padding:6px 10px;display:flex;align-items:baseline;
+    border:1px solid #3a3d45;border-radius:6px;padding:6px 10px;white-space:pre-wrap;overflow-wrap:anywhere;
   }
   .inputbox .prompt{color:var(--dim);margin-right:8px}
-  #typed{white-space:pre-wrap;overflow-wrap:anywhere}
-  .cursor{display:inline-block;width:.5em;height:1.1em;background:var(--fg);margin-left:1px;
-    vertical-align:text-bottom;animation:blink 1s steps(1) infinite}
+  /* the cursor is ::after the typed text so it tracks the last character, even wrapped */
+  #typed::after{
+    content:'';display:inline-block;width:.5em;height:1.05em;background:var(--fg);
+    margin-left:1px;vertical-align:-.18em;animation:blink 1s steps(1) infinite;
+  }
   @keyframes blink{50%{opacity:0}}
   .hintrow{display:flex;justify-content:space-between;color:var(--dimmer);font-size:.85em;padding:2px 16px 10px}
 
@@ -109,9 +111,7 @@
     <div class="term">
       <div id="scroll"></div>
       <div id="spinner" class="hidden">&nbsp;</div>
-      <div class="inputwrap"><div class="inputbox">
-        <span class="prompt">&gt;</span><span id="typed"></span><span class="cursor" id="cursor"></span>
-      </div></div>
+      <div class="inputwrap"><div class="inputbox"><span class="prompt">&gt;</span><span id="typed"></span></div></div>
       <div class="hintrow"><span>? for shortcuts</span><span id="hintright"></span></div>
     </div>
   </div>
@@ -374,17 +374,19 @@ function updateUI(){
   barEl.value = p;
   countEl.textContent = 'prompt ' + p + '/' + PROMPTS.length;
 }
-function seekToPrompt(p){  // p=0 → very start; p=k → just before prompt k types in
-  seekTo(p <= 0 ? 0 : PROMPTS[Math.min(p, PROMPTS.length) - 1]);
+// seeking always lands with the prompt already submitted (visible in the transcript),
+// so a presenter jumps straight to Claude's response — never to an empty input box
+function seekToPrompt(p){  // p=0 → very start; p=k → just after prompt k was sent
+  seekTo(p <= 0 ? 0 : PROMPTS[Math.min(p, PROMPTS.length) - 1] + 1);
 }
 function nextPrompt(){
-  const next = PROMPTS.find(i => i > idx);
-  seekTo(next !== undefined ? next : EVENTS.length);
+  const next = PROMPTS.find(i => i >= idx);
+  seekTo(next !== undefined ? next + 1 : EVENTS.length);
 }
 function prevPrompt(){
-  // mid-turn → restart current prompt; at a prompt's start → jump to the previous one
-  const before = PROMPTS.filter(i => i < idx);
-  seekTo(before.length ? before[before.length - 1] : 0);
+  // mid-turn → back to the start of the current turn; at a turn's start → previous turn
+  const before = PROMPTS.filter(i => i + 1 < idx);
+  seekTo(before.length ? before[before.length - 1] + 1 : 0);
 }
 
 /* ---------- controls ---------- */
