@@ -141,6 +141,19 @@ def tool_summary(name, inp, cwd):
         arg = one_line(inp.get("query", ""), 90)
     elif name == "Skill":
         arg = one_line(inp.get("skill", ""), 60)
+    elif name == "TaskCreate":
+        arg = one_line(inp.get("subject", ""), 80)
+    elif name in ("TaskUpdate", "TaskGet", "TaskStop", "TaskOutput"):
+        arg = "#" + str(inp.get("taskId", "?"))
+        if inp.get("status"):
+            arg += " → " + str(inp["status"])
+        elif inp.get("subject"):
+            arg += " " + one_line(inp["subject"], 60)
+    elif name == "AskUserQuestion":
+        qs = inp.get("questions") or []
+        arg = one_line(qs[0].get("question", "") if qs and isinstance(qs[0], dict) else "", 90)
+    elif name == "Workflow":
+        arg = inp.get("name") or ("script" if inp.get("script") or inp.get("scriptPath") else "")
     elif name == "TodoWrite":
         arg = ""
     else:
@@ -212,8 +225,15 @@ def result_text(content):
     if isinstance(content, list):
         parts = []
         for b in content:
-            if isinstance(b, dict) and b.get("type") == "text":
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "text":
                 parts.append(b.get("text", ""))
+            elif b.get("type") == "image":
+                src = b.get("source") or {}
+                kb = round(len(src.get("data", "")) * 3 / 4 / 1024)
+                media = src.get("media_type", "image")
+                parts.append(f"[Image: {media}{f' · {kb} KB' if kb else ''}]")
         return "\n".join(parts)
     return ""
 
@@ -309,6 +329,11 @@ def parse_session(path):
 
             if t == "ai-title":
                 meta["title"] = o.get("aiTitle") or meta["title"]
+                continue
+            if t == "system" and o.get("subtype") == "away_summary" and o.get("content"):
+                events.append({"k": "notice",
+                               "text": "While you were away: " + one_line(clean_text(o["content"]), 220),
+                               "ts": parse_ts(o.get("timestamp"))})
                 continue
             if t not in ("user", "assistant"):
                 continue
