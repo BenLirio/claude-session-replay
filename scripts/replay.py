@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 
 PROJECTS_DIR = os.path.expanduser(os.environ.get("CLAUDE_PROJECTS_DIR", "~/.claude/projects"))
 
-MAX_RESULT_LINES = 10
+MAX_RESULT_LINES = 4  # CC truncates hard in the transcript; ctrl+o is the escape hatch
 MAX_RESULT_CHARS = 1500
 MAX_DIFF_LINES = 14
 MAX_THINKING_CHARS = 600
@@ -134,6 +134,8 @@ def tool_summary(name, inp, cwd):
         if inp.get("path"):
             arg += ", path: " + short_path(inp["path"], cwd)
     elif name in ("Task", "Agent"):
+        # CC titles agent launches with the subagent type: Explore(Find flaky tests)
+        display = inp.get("subagent_type") or "Task"
         arg = one_line(inp.get("description") or inp.get("prompt", ""), 80)
     elif name == "WebFetch":
         arg = one_line(inp.get("url", ""), 90)
@@ -378,10 +380,20 @@ def parse_session(path):
                         if b.get("type") == "tool_result":
                             ev = tools_by_id.get(b.get("tool_use_id"))
                             if ev is not None:
-                                res, hidden = truncate_block(result_text(b.get("content")))
-                                ev["res"] = res
-                                ev["hidden"] = hidden
-                                ev["err"] = bool(b.get("is_error"))
+                                full = result_text(b.get("content"))
+                                err = bool(b.get("is_error"))
+                                mexit = re.match(r"Exit code (\d+)", full)
+                                if mexit and mexit.group(1) != "0":
+                                    err = True  # CC turns the dot red on nonzero exit
+                                ev["err"] = err
+                                if not err and ev["name"] == "Read" and full \
+                                        and not full.startswith("[Image:"):
+                                    # CC collapses Read to a one-line summary
+                                    n = full.count("\n") + 1
+                                    ev["res"] = f"Read {n} line{'s' if n != 1 else ''} (ctrl+o to expand)"
+                                    ev["hidden"] = 0
+                                else:
+                                    ev["res"], ev["hidden"] = truncate_block(full)
                                 if ts and ev["ts"]:
                                     ev["dur"] = max(0, ts - ev["ts"])
                                 if ev["err"]:

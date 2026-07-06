@@ -50,7 +50,7 @@
   .welcome b{color:var(--fg);font-weight:600}
 
   .line,.entry{margin-bottom:12px;white-space:pre-wrap;overflow-wrap:anywhere}
-  .user{color:var(--user)}
+  .user{color:var(--user);background:#1e2126;padding:5px 10px;border-radius:5px}
   .entry{display:flex}
   .bullet{flex:0 0 2ch;color:var(--fg)}
   .bullet.run{color:var(--orange)}
@@ -262,6 +262,7 @@ function toolGroupSummary(evs){
     else if (n === 'Write') cat = 'wrote|# file|# files';
     else if (n === 'Grep' || n === 'Glob') cat = 'ran|# search|# searches';
     else if (n === 'WebSearch' || n === 'WebFetch') cat = 'searched|the web # time|the web # times';
+    else if (n === 'Agent' || n === 'Task') cat = 'launched|# background agent|# background agents';
     else cat = 'made|# other tool call|# other tool calls';
     counts.set(cat, (counts.get(cat) || 0) + 1);
   }
