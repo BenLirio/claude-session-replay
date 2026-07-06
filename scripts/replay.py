@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+"""Generate a self-contained HTML "terminal recording" replay of a Claude Code session.
+
+Takes a session ID (or a path to a session .jsonl), parses the transcript, and
+writes a single HTML file that replays the session inside a fake terminal window:
+user prompts get typed in, Claude "thinks" with a spinner, tool calls run and
+print their output — just like watching the real thing, but on your schedule.
+
+No dependencies beyond the Python standard library.
+
+Usage:
+    replay.py <sessionId|path.jsonl> [-o out.html] [--title "My demo"]
+    replay.py --list [N]        # list recent sessions to pick from
+"""
+
+import argparse
+import glob
+import html
+import json
+import os
+import re
+import sys
+from datetime import datetime, timezone
+
+PROJECTS_DIR = os.path.expanduser(os.environ.get("CLAUDE_PROJECTS_DIR", "~/.claude/projects"))
+
+MAX_RESULT_LINES = 10
+MAX_RESULT_CHARS = 1500
+MAX_THINKING_CHARS = 600
+MAX_TEXT_CHARS = 6000
+
+# Claude Code display names for tools
+TOOL_DISPLAY = {
+    "Edit": "Update",
+    "MultiEdit": "Update",
+    "Grep": "Search",
+    "Glob": "Search",
+    "WebFetch": "Fetch",
+    "WebSearch": "Web Search",
+    "TodoWrite": "Update Todos",
+    "Agent": "Task",
+}
+
+
+def parse_ts(s):
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def find_session_file(session_id):
+    """Resolve a session id (or unique prefix) to a transcript path."""
+    if os.path.isfile(session_id):
+        return session_id
+    matches = glob.glob(os.path.join(PROJECTS_DIR, "*", session_id + "*.jsonl"))
+    # Prefer exact matches over prefix matches
+    exact = [m for m in matches if os.path.basename(m) == session_id + ".jsonl"]
+    if exact:
+        matches = exact
+    if not matches:
+        sys.exit(f"error: no session matching {session_id!r} under {PROJECTS_DIR}\n"
+                 f"hint: run with --list to see recent sessions")
+    if len(matches) > 1:
+        listing = "\n  ".join(matches)
+        sys.exit(f"error: session id {session_id!r} is ambiguous:\n  {listing}")
+    return matches[0]
+
+
+def list_sessions(limit):
+    files = glob.glob(os.path.join(PROJECTS_DIR, "*", "*.jsonl"))
+    files.sort(key=os.path.getmtime, reverse=True)
+    rows = []
+    for f in files[:limit]:
+        sid = os.path.basename(f)[:-6]
+        project = os.path.basename(os.path.dirname(f))
+        title = ""
+        try:
+            with open(f, errors="replace") as fh:
+                for line in fh:
+                    if '"ai-title"' not in line and '"aiTitle"' not in line:
+                        continue
+                    try:
+                        o = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if o.get("type") == "ai-title":
+                        title = o.get("aiTitle", "")
+        except OSError:
+            pass
+        mtime = datetime.fromtimestamp(os.path.getmtime(f)).strftime("%Y-%m-%d %H:%M")
+        rows.append((mtime, sid, project, title))
+    if not rows:
+        print(f"no sessions found under {PROJECTS_DIR}")
+        return
+    for mtime, sid, project, title in rows:
+        print(f"{mtime}  {sid}  {project}  {title}")
+
+
+def short_path(path, cwd):
+    if not isinstance(path, str):
+        return str(path)
+    if cwd and path.startswith(cwd.rstrip("/") + "/"):
+        return path[len(cwd.rstrip("/")) + 1:]
+    home = os.path.expanduser("~")
+    if path.startswith(home):
+        return "~" + path[len(home):]
+    return path
+
+
+def one_line(s, limit=110):
+    s = " ".join(str(s).split())
+    return s[: limit - 1] + "…" if len(s) > limit else s
+
+
+def tool_summary(name, inp, cwd):
+    """Build the `ToolName(args)` header text the way Claude Code renders it."""
+    if not isinstance(inp, dict):
+        inp = {}
+    display = TOOL_DISPLAY.get(name, name)
+    if name.startswith("mcp__"):
+        parts = name.split("__")
+        display = parts[-1] + " (MCP)"
+    if name == "Bash":
+        arg = one_line(inp.get("command", ""))
+    elif name in ("Read", "Write", "Edit", "MultiEdit", "NotebookEdit"):
+        arg = short_path(inp.get("file_path") or inp.get("notebook_path") or "", cwd)
+    elif name in ("Grep", "Glob"):
+        arg = 'pattern: "%s"' % one_line(inp.get("pattern", ""), 60)
+        if inp.get("path"):
+            arg += ", path: " + short_path(inp["path"], cwd)
+    elif name in ("Task", "Agent"):
+        arg = one_line(inp.get("description") or inp.get("prompt", ""), 80)
+    elif name == "WebFetch":
+        arg = one_line(inp.get("url", ""), 90)
+    elif name == "WebSearch":
+        arg = one_line(inp.get("query", ""), 90)
+    elif name == "Skill":
+        arg = one_line(inp.get("skill", ""), 60)
+    elif name == "TodoWrite":
+        arg = ""
+    else:
+        keys = ("description", "query", "prompt", "file_path", "path", "url", "title")
+        arg = next((one_line(inp[k], 80) for k in keys if inp.get(k)), "")
+        if not arg and inp:
+            arg = one_line(json.dumps(inp, ensure_ascii=False), 80)
+    return f"{display}({arg})" if arg else display
+
+
+def truncate_block(text, max_lines=MAX_RESULT_LINES, max_chars=MAX_RESULT_CHARS):
+    """Trim long output; return (kept_text, hidden_line_count)."""
+    text = clean_text(text).rstrip("\n")
+    if len(text) > max_chars:
+        text = text[:max_chars]
+    lines = text.split("\n")
+    hidden = 0
+    if len(lines) > max_lines:
+        hidden = len(lines) - max_lines
+        lines = lines[:max_lines]
+    return "\n".join(lines), hidden
+
+
+def result_text(content):
+    """tool_result content may be a string or a list of blocks."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "text":
+                parts.append(b.get("text", ""))
+        return "\n".join(parts)
+    return ""
+
+
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)?|[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def clean_text(s):
+    """Strip ANSI escapes and control chars that would render as tofu in HTML."""
+    return ANSI_RE.sub("", s or "")
+
+
+COMMAND_RE = re.compile(r"<command-name>(.*?)</command-name>", re.S)
+COMMAND_ARGS_RE = re.compile(r"<command-args>(.*?)</command-args>", re.S)
+
+
+def parse_session(path):
+    """Parse a transcript .jsonl into replay events + session metadata."""
+    events = []
+    tools_by_id = {}
+    meta = {"sessionId": os.path.basename(path)[:-6], "cwd": "", "model": "",
+            "gitBranch": "", "title": "", "startTs": None}
+
+    with open(path, errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                o = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            t = o.get("type")
+
+            if t == "ai-title":
+                meta["title"] = o.get("aiTitle") or meta["title"]
+                continue
+            if t not in ("user", "assistant"):
+                continue
+            if o.get("isSidechain"):
+                continue  # subagent traffic; the main thread is the story
+
+            ts = parse_ts(o.get("timestamp"))
+            if meta["startTs"] is None and ts:
+                meta["startTs"] = ts
+            if not meta["cwd"] and o.get("cwd"):
+                meta["cwd"] = o["cwd"]
+            if not meta["gitBranch"] and o.get("gitBranch"):
+                meta["gitBranch"] = o["gitBranch"]
+
+            msg = o.get("message") or {}
+            content = msg.get("content")
+
+            if t == "user":
+                if o.get("isMeta"):
+                    continue
+                if isinstance(content, str):
+                    text = content
+                    if "<local-command-stdout>" in text or "<local-command-caveat>" in text:
+                        continue
+                    m = COMMAND_RE.search(text)
+                    if m:
+                        cmd = m.group(1).strip()
+                        args = COMMAND_ARGS_RE.search(text)
+                        args = args.group(1).strip() if args else ""
+                        text = (cmd + " " + args).strip()
+                    if text.strip():
+                        events.append({"k": "user", "text": clean_text(text.strip())[:MAX_TEXT_CHARS], "ts": ts})
+                elif isinstance(content, list):
+                    for b in content:
+                        if not isinstance(b, dict):
+                            continue
+                        if b.get("type") == "tool_result":
+                            ev = tools_by_id.get(b.get("tool_use_id"))
+                            if ev is not None:
+                                res, hidden = truncate_block(result_text(b.get("content")))
+                                ev["res"] = res
+                                ev["hidden"] = hidden
+                                ev["err"] = bool(b.get("is_error"))
+                                if ts and ev["ts"]:
+                                    ev["dur"] = max(0, ts - ev["ts"])
+                        elif b.get("type") == "text":
+                            text = b.get("text", "").strip()
+                            if text.startswith("[Request interrupted"):
+                                events.append({"k": "int", "ts": ts})
+                            elif text and not text.startswith("<"):
+                                events.append({"k": "user", "text": text[:MAX_TEXT_CHARS], "ts": ts})
+
+            elif t == "assistant":
+                if msg.get("model"):
+                    meta["model"] = msg["model"]
+                for b in content or []:
+                    if not isinstance(b, dict):
+                        continue
+                    bt = b.get("type")
+                    if bt == "text":
+                        text = b.get("text", "").strip()
+                        if text:
+                            events.append({"k": "a", "text": text[:MAX_TEXT_CHARS], "ts": ts})
+                    elif bt == "thinking":
+                        think = (b.get("thinking") or "").strip()
+                        if think:
+                            events.append({"k": "think", "text": think[:MAX_THINKING_CHARS], "ts": ts})
+                    elif bt == "tool_use":
+                        ev = {"k": "tool", "name": b.get("name", "Tool"),
+                              "summary": tool_summary(b.get("name", ""), b.get("input"), meta["cwd"]),
+                              "res": "", "hidden": 0, "err": False, "dur": 1.0, "ts": ts}
+                        tools_by_id[b.get("id")] = ev
+                        events.append(ev)
+
+    # Collapse consecutive duplicate user events (retries after interrupts etc.)
+    deduped = []
+    for ev in events:
+        if deduped and ev["k"] == "user" and deduped[-1]["k"] == "user" \
+                and deduped[-1]["text"] == ev["text"]:
+            continue
+        deduped.append(ev)
+    return deduped, meta
+
+
+def build_html(events, meta, title):
+    template_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "template.html")
+    with open(template_path) as fh:
+        template = fh.read()
+
+    def embed(obj):
+        return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+
+    started = ""
+    if meta["startTs"]:
+        started = datetime.fromtimestamp(meta["startTs"], tz=timezone.utc).astimezone().strftime("%b %d, %Y")
+
+    page_title = title or meta["title"] or f"Claude Code session {meta['sessionId'][:8]}"
+    payload = {
+        "cwd": meta["cwd"] or "~",
+        "model": meta["model"] or "claude",
+        "branch": meta["gitBranch"] or "",
+        "sessionId": meta["sessionId"],
+        "started": started,
+        "title": page_title,
+    }
+    return (template
+            .replace("__PAGE_TITLE__", html.escape(page_title))
+            .replace("__META_JSON__", embed(payload))
+            .replace("__EVENTS_JSON__", embed(events)))
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("session", nargs="?", help="session id (or unique prefix), or path to a session .jsonl")
+    ap.add_argument("-o", "--out", help="output HTML path (default: <sessionId>-replay.html)")
+    ap.add_argument("--title", help="page/window title override")
+    ap.add_argument("--list", nargs="?", const=15, type=int, metavar="N",
+                    help="list the N most recent sessions and exit (default 15)")
+    args = ap.parse_args()
+
+    if args.list is not None:
+        list_sessions(args.list)
+        return
+    if not args.session:
+        ap.error("provide a session id, or use --list to browse recent sessions")
+
+    path = find_session_file(args.session)
+    events, meta = parse_session(path)
+    if not events:
+        sys.exit(f"error: no replayable messages found in {path}")
+
+    out = args.out or f"{meta['sessionId'][:8]}-replay.html"
+    with open(out, "w") as fh:
+        fh.write(build_html(events, meta, args.title))
+    n_user = sum(1 for e in events if e["k"] == "user")
+    n_tool = sum(1 for e in events if e["k"] == "tool")
+    print(f"wrote {out} ({len(events)} events: {n_user} prompts, {n_tool} tool calls)")
+    print(f"source: {path}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__PAGE_TITLE__</title>
+<style>
+  :root{
+    --bg:#0b0d10; --win:#15171c; --bar:#23262c; --border:#2c2f36;
+    --fg:#dcdcd7; --dim:#8a8a85; --dimmer:#5c5c58;
+    --orange:#d97757; --green:#7cb87f; --red:#d67373; --user:#9d9d97;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:radial-gradient(1200px 800px at 50% 20%, #14181f 0%, var(--bg) 60%);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:14px;padding:24px 12px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Cascadia Mono','Liberation Mono',monospace;
+  }
+  .window{
+    width:min(940px,96vw);height:min(680px,78vh);display:flex;flex-direction:column;
+    background:var(--win);border:1px solid var(--border);border-radius:10px;
+    box-shadow:0 24px 60px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.4);overflow:hidden;
+  }
+  .titlebar{
+    flex:0 0 38px;display:flex;align-items:center;background:var(--bar);
+    border-bottom:1px solid var(--border);padding:0 14px;position:relative;
+  }
+  .lights{display:flex;gap:8px}
+  .lights span{width:12px;height:12px;border-radius:50%}
+  .lights .r{background:#ff5f57}.lights .y{background:#febc2e}.lights .g{background:#28c840}
+  .titletext{
+    position:absolute;left:0;right:0;text-align:center;pointer-events:none;
+    color:var(--dim);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 90px;
+  }
+  .term{flex:1;display:flex;flex-direction:column;min-height:0;font-size:13px;line-height:1.5;color:var(--fg)}
+  #scroll{flex:1;overflow-y:auto;padding:14px 18px 6px;scrollbar-width:thin;scrollbar-color:#33363d transparent}
+  #scroll::-webkit-scrollbar{width:8px}
+  #scroll::-webkit-scrollbar-thumb{background:#33363d;border-radius:4px}
+
+  .welcome{
+    border:1px solid var(--border);border-radius:6px;padding:8px 12px;margin-bottom:14px;
+    color:var(--dim);white-space:pre-wrap;
+  }
+  .welcome .star{color:var(--orange)}
+  .welcome b{color:var(--fg);font-weight:600}
+
+  .line,.entry{margin-bottom:12px;white-space:pre-wrap;overflow-wrap:anywhere}
+  .user{color:var(--user)}
+  .entry{display:flex}
+  .bullet{flex:0 0 2ch;color:var(--fg)}
+  .bullet.run{color:var(--orange)}
+  .bullet.ok{color:var(--green)}
+  .bullet.err{color:var(--red)}
+  .body{flex:1;min-width:0}
+  .think .bullet{color:var(--dimmer)}
+  .think .body{color:var(--dimmer);font-style:italic}
+  .toolhead{font-weight:600}
+  .toolhead .runlabel{color:var(--dim);font-weight:400}
+  .tres{color:var(--dim);margin-top:2px;white-space:pre-wrap;overflow-wrap:anywhere}
+  .tres.errtext{color:var(--red)}
+  .tres .more{color:var(--dimmer)}
+  .intline{color:var(--red)}
+  code{background:#22252c;border-radius:3px;padding:0 4px}
+  .codeblock{background:#1d2026;border:1px solid var(--border);border-radius:5px;padding:8px 10px;margin:6px 0;overflow-x:auto}
+  .body b{color:#fff}
+
+  #spinner{flex:0 0 auto;padding:2px 18px 6px;color:var(--orange);font-size:13px}
+  #spinner .meta{color:var(--dimmer)}
+  #spinner.hidden{visibility:hidden}
+
+  .inputwrap{flex:0 0 auto;padding:0 14px 4px}
+  .inputbox{
+    border:1px solid #3a3d45;border-radius:6px;padding:6px 10px;display:flex;align-items:baseline;
+  }
+  .inputbox .prompt{color:var(--dim);margin-right:8px}
+  #typed{white-space:pre-wrap;overflow-wrap:anywhere}
+  .cursor{display:inline-block;width:7px;height:15px;background:var(--fg);margin-left:1px;
+    vertical-align:text-bottom;animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .hintrow{display:flex;justify-content:space-between;color:var(--dimmer);font-size:11.5px;padding:2px 16px 10px}
+
+  .controls{
+    width:min(940px,96vw);display:flex;align-items:center;gap:10px;
+    background:#14161acc;border:1px solid var(--border);border-radius:10px;padding:8px 14px;
+    font-size:12.5px;color:var(--dim);backdrop-filter:blur(6px);
+  }
+  .controls button{
+    background:#22252c;border:1px solid #34373f;color:var(--fg);border-radius:6px;
+    padding:4px 10px;font:inherit;cursor:pointer;min-width:38px;
+  }
+  .controls button:hover{background:#2b2f37}
+  #bar{flex:1;accent-color:var(--orange);cursor:pointer}
+  #count{min-width:64px;text-align:right;font-variant-numeric:tabular-nums}
+  .caption{color:var(--dimmer);font-size:11.5px;text-align:center}
+  .caption a{color:var(--dim)}
+</style>
+</head>
+<body>
+  <div class="window">
+    <div class="titlebar">
+      <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+      <div class="titletext" id="wintitle"></div>
+    </div>
+    <div class="term">
+      <div id="scroll"></div>
+      <div id="spinner" class="hidden">&nbsp;</div>
+      <div class="inputwrap"><div class="inputbox">
+        <span class="prompt">&gt;</span><span id="typed"></span><span class="cursor" id="cursor"></span>
+      </div></div>
+      <div class="hintrow"><span>? for shortcuts</span><span id="hintright"></span></div>
+    </div>
+  </div>
+  <div class="controls">
+    <button id="restart" title="Restart (r)">↺</button>
+    <button id="toggle" title="Play/pause (space)">❚❚</button>
+    <button id="speedbtn" title="Cycle speed (s)">1×</button>
+    <input type="range" id="bar" min="0" value="0" step="1">
+    <span id="count"></span>
+    <button id="skipend" title="Skip to end (e)">»</button>
+  </div>
+  <div class="caption" id="caption"></div>
+
+<script>
+const META = __META_JSON__;
+const EVENTS = __EVENTS_JSON__;
+
+const $ = id => document.getElementById(id);
+const scrollEl = $('scroll'), typedEl = $('typed'), spinnerEl = $('spinner');
+const barEl = $('bar'), countEl = $('count'), toggleEl = $('toggle'), speedEl = $('speedbtn');
+
+const SPEEDS = [1,2,4,8];
+const VERBS = ['Pondering','Simmering','Brewing','Percolating','Noodling','Mulling','Distilling',
+               'Reticulating','Contemplating','Unfurling','Tinkering','Conjuring','Marinating'];
+const GLYPHS = ['·','✢','✳','✻','✽','✻','✳','✢'];
+
+let idx = 0, playing = true, speedIdx = 0, runId = 0, autoscroll = true;
+const CANCEL = Symbol('cancel');
+
+/* ---------- rendering helpers ---------- */
+function esc(s){
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function md(s){
+  // minimal markdown: fenced code, inline code, bold — enough to look right in a terminal
+  const parts = s.split(/```/);
+  let out = '';
+  for (let i = 0; i < parts.length; i++){
+    if (i % 2 === 1){
+      const body = parts[i].replace(/^[\w+-]*\n/,'');
+      out += '<div class="codeblock">' + esc(body.replace(/\n$/,'')) + '</div>';
+    } else {
+      out += esc(parts[i])
+        .replace(/`([^`\n]+)`/g,'<code>$1</code>')
+        .replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>');
+    }
+  }
+  return out;
+}
+function scrollDown(force){
+  if (autoscroll || force) scrollEl.scrollTop = scrollEl.scrollHeight;
+}
+scrollEl.addEventListener('scroll', () => {
+  autoscroll = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 40;
+});
+function addWelcome(){
+  const d = document.createElement('div');
+  d.className = 'welcome';
+  d.innerHTML = '<span class="star">✻</span> <b>Welcome to Claude Code!</b>\n\n' +
+    '  /help for help, /status for your current setup\n\n' +
+    '  cwd: ' + esc(META.cwd);
+  scrollEl.appendChild(d);
+}
+function el(cls, html){
+  const d = document.createElement('div');
+  d.className = cls;
+  d.innerHTML = html;
+  scrollEl.appendChild(d);
+  scrollDown();
+  return d;
+}
+function addUser(text){ return el('line user', '&gt; ' + esc(text)); }
+function addEntry(bulletCls, bullet, bodyHtml, extraCls){
+  const d = el('entry' + (extraCls ? ' ' + extraCls : ''),
+    '<span class="bullet ' + bulletCls + '">' + bullet + '</span><div class="body">' + bodyHtml + '</div>');
+  return d;
+}
+function toolResultHtml(ev){
+  if (!ev.res && !ev.err) return '<div class="tres">└  (no output)</div>';
+  const cls = ev.err ? 'tres errtext' : 'tres';
+  let txt = esc(ev.res || (ev.err ? 'Error' : ''));
+  txt = txt.split('\n').map((l,i) => i === 0 ? '└  ' + l : '   ' + l).join('\n');
+  let more = ev.hidden ? '\n   <span class="more">… +' + ev.hidden + ' lines (ctrl+o to expand)</span>' : '';
+  return '<div class="' + cls + '">' + txt + more + '</div>';
+}
+function renderFinal(ev){
+  if (ev.k === 'user') addUser(ev.text);
+  else if (ev.k === 'a') addEntry('', '●', md(ev.text));
+  else if (ev.k === 'think') addEntry('', '✻', esc('Thinking…\n' + ev.text), 'think');
+  else if (ev.k === 'tool')
+    addEntry(ev.err ? 'err' : 'ok', '●',
+      '<span class="toolhead">' + esc(ev.summary) + '</span>' + toolResultHtml(ev));
+  else if (ev.k === 'int') el('line intline', '  └  Interrupted by user');
+}
+
+/* ---------- playback engine ---------- */
+const frame = ms => new Promise(r => setTimeout(r, ms));
+function speed(){ return SPEEDS[speedIdx]; }
+
+// waits `ms` of *content time*; real time shrinks with speed; freezes while paused
+async function wait(ms, token){
+  let remaining = ms;
+  while (remaining > 0){
+    if (token !== runId) throw CANCEL;
+    await frame(16);
+    if (playing) remaining -= 16 * speed();
+  }
+}
+
+let spinnerTimer = null;
+function spinnerOn(realGap, capMs){
+  const verb = VERBS[Math.floor(Math.random()*VERBS.length)];
+  let g = 0, contentMs = 0, tokens = 100 + Math.floor(Math.random()*900);
+  spinnerEl.classList.remove('hidden');
+  clearInterval(spinnerTimer);
+  spinnerTimer = setInterval(() => {
+    if (!playing) return;
+    g++;
+    contentMs += 90 * speed();
+    // count up to the *recording's* real wait time over the (capped) replay wait
+    const secs = Math.max(1, Math.round(Math.min(1, contentMs / capMs) * realGap));
+    tokens += Math.floor(Math.random()*120*speed());
+    spinnerEl.innerHTML = GLYPHS[g % GLYPHS.length] + ' ' + verb + '… ' +
+      '<span class="meta">(' + secs + 's · ↑ ' + (tokens/1000).toFixed(1) + 'k tokens · esc to interrupt)</span>';
+  }, 90);
+}
+function spinnerOff(){
+  clearInterval(spinnerTimer);
+  spinnerTimer = null;
+  spinnerEl.classList.add('hidden');
+  spinnerEl.innerHTML = '&nbsp;';
+}
+
+async function typeUser(ev, token){
+  typedEl.textContent = '';
+  const text = ev.text;
+  const per = Math.min(45, Math.max(6, 1400 / text.length));
+  for (const ch of text){
+    typedEl.textContent += ch;
+    await wait(per, token);
+  }
+  await wait(350, token);
+  typedEl.textContent = '';
+  addUser(text);
+  await wait(250, token);
+}
+
+async function revealText(bodyEl, text, total, token){
+  const step = Math.max(2, Math.ceil(text.length / (total / 24)));
+  let shown = 0;
+  while (shown < text.length){
+    shown = Math.min(text.length, shown + step);
+    bodyEl.textContent = text.slice(0, shown);
+    scrollDown();
+    await wait(24, token);
+  }
+}
+
+async function animate(ev, prev, token){
+  // pause between events, matching the recording's rhythm (capped so demos stay snappy)
+  const realGap = (prev && ev.ts && prev.ts) ? Math.max(0, ev.ts - prev.ts) : 0;
+  if (ev.k === 'user'){
+    if (prev) await wait(Math.min(realGap, 1.2) * 1000, token);
+    await typeUser(ev, token);
+    return;
+  }
+  if (realGap > 0.7 && ev.k !== 'int'){
+    const capMs = Math.min(realGap, prev && prev.k === 'user' ? 3.5 : 1.6) * 1000;
+    spinnerOn(realGap, capMs);
+    try { await wait(capMs, token); }
+    finally { spinnerOff(); }
+  }
+  if (ev.k === 'a'){
+    const d = addEntry('', '●', '');
+    const body = d.querySelector('.body');
+    await revealText(body, ev.text, Math.min(2800, Math.max(500, ev.text.length * 10)), token);
+    body.innerHTML = md(ev.text);
+    scrollDown();
+    await wait(300, token);
+  } else if (ev.k === 'think'){
+    const d = addEntry('', '✻', 'Thinking…', 'think');
+    const body = d.querySelector('.body');
+    await wait(350, token);
+    await revealText(body, 'Thinking…\n' + ev.text, 1100, token);
+    await wait(200, token);
+  } else if (ev.k === 'tool'){
+    const d = addEntry('run', '●',
+      '<span class="toolhead">' + esc(ev.summary) + '</span><div class="tres">└  <span class="more">Running…</span></div>');
+    await wait(Math.min(ev.dur || 1, 2.5) * 1000, token);
+    d.querySelector('.bullet').className = 'bullet ' + (ev.err ? 'err' : 'ok');
+    d.querySelector('.tres').outerHTML = toolResultHtml(ev);
+    scrollDown();
+    await wait(250, token);
+  } else if (ev.k === 'int'){
+    el('line intline', '  └  Interrupted by user');
+    await wait(400, token);
+  }
+}
+
+let loopRunning = false;
+async function runLoop(){
+  if (loopRunning) return;
+  loopRunning = true;
+  const token = runId;
+  try {
+    while (idx < EVENTS.length){
+      if (token !== runId) throw CANCEL;
+      await animate(EVENTS[idx], idx > 0 ? EVENTS[idx-1] : null, token);
+      idx++;
+      updateUI();
+    }
+    typedEl.textContent = '';
+    toggleEl.textContent = '▶';
+    playing = false;
+  } catch (e){
+    if (e !== CANCEL) throw e;
+  } finally {
+    loopRunning = false;
+  }
+}
+
+function seekTo(n, keepPlaying){
+  runId++;
+  spinnerOff();
+  typedEl.textContent = '';
+  scrollEl.innerHTML = '';
+  addWelcome();
+  for (let i = 0; i < n; i++) renderFinal(EVENTS[i]);
+  idx = n;
+  updateUI();
+  scrollDown(true);
+  autoscroll = true;
+  if (keepPlaying !== undefined) playing = keepPlaying;
+  if (playing && idx < EVENTS.length){
+    toggleEl.textContent = '❚❚';
+    setTimeout(runLoop, 0);
+  }
+}
+
+function updateUI(){
+  barEl.value = idx;
+  countEl.textContent = idx + '/' + EVENTS.length;
+}
+
+/* ---------- controls ---------- */
+toggleEl.onclick = () => {
+  if (idx >= EVENTS.length){ seekTo(0, true); return; }
+  playing = !playing;
+  toggleEl.textContent = playing ? '❚❚' : '▶';
+  if (playing) runLoop();
+};
+$('restart').onclick = () => seekTo(0, true);
+$('skipend').onclick = () => { seekTo(EVENTS.length); playing = false; toggleEl.textContent = '▶'; };
+speedEl.onclick = () => {
+  speedIdx = (speedIdx + 1) % SPEEDS.length;
+  speedEl.textContent = SPEEDS[speedIdx] + '×';
+};
+barEl.oninput = () => seekTo(+barEl.value);
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space'){ e.preventDefault(); toggleEl.onclick(); }
+  else if (e.key === 'ArrowRight') seekTo(Math.min(EVENTS.length, idx + 1));
+  else if (e.key === 'ArrowLeft') seekTo(Math.max(0, idx - 1));
+  else if (e.key === 's') speedEl.onclick();
+  else if (e.key === 'r') seekTo(0, true);
+  else if (e.key === 'e') $('skipend').onclick();
+});
+
+/* ---------- boot ---------- */
+const cwdBase = META.cwd.split('/').filter(Boolean).pop() || META.cwd;
+$('wintitle').textContent = 'claude — ' + cwdBase;
+$('hintright').textContent = META.model + (META.branch ? ' · ' + META.branch : '');
+$('caption').textContent = 'Replay of Claude Code session ' + META.sessionId.slice(0,8) +
+  (META.started ? ' · ' + META.started : '') + ' — ' + META.title;
+barEl.max = EVENTS.length;
+addWelcome();
+updateUI();
+runLoop();
+</script>
+</body>
+</html>
