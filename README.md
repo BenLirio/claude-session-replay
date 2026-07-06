@@ -64,6 +64,12 @@ watch the response.
 The window fills the browser and the font scales with screen size, so a fullscreened
 browser on a projector is presentation-ready as-is.
 
+Once a turn completes (or when you skip around), consecutive tool calls collapse into
+a summary line — `▸ Read 2 files, ran 1 shell command (click to expand)` — just like
+Claude Code's transcript. Click to expand any group. Assistant text renders the
+markdown subset CC does: bold, headings, inline/fenced code, pipe tables, and
+clickable links.
+
 Long waits from the original recording are compressed so the demo stays snappy, but
 the status spinner still shows the *real* elapsed time from the session, so the
 audience sees how long each step actually took.

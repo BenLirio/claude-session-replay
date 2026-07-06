@@ -73,7 +73,19 @@
   .teamline{color:#8fb4d9}
   .teamline .who{font-weight:600}
   .noticeline{color:var(--dimmer)}
+  .tghead{color:var(--dim);cursor:pointer;user-select:none;margin-bottom:12px}
+  .tghead:hover .gsum{color:var(--fg)}
+  .tghead .chev{display:inline-block;transition:transform .15s;color:var(--dimmer)}
+  .tgroup:not(.collapsed) .chev{transform:rotate(90deg)}
+  .tghead .more{color:var(--dimmer)}
+  .tgroup.collapsed .tgbody{display:none}
   code{background:#22252c;border-radius:3px;padding:0 4px}
+  .body a{color:#7fb3e8;text-decoration:underline;text-underline-offset:2px}
+  .body a:hover{color:#a8ccf0}
+  .mdtable{border-collapse:collapse;margin:4px 0;white-space:normal}
+  .mdtable th,.mdtable td{border:1px solid #3a3d45;padding:3px 12px;text-align:left}
+  .mdtable th{color:var(--fg);font-weight:600;background:#1d2026}
+  .mdtable td{color:var(--dim)}
   .codeblock{background:#1d2026;border:1px solid var(--border);border-radius:5px;padding:8px 10px;margin:6px 0;overflow-x:auto}
   .body b{color:#fff}
 
@@ -165,8 +177,42 @@ function promptPos(){  // how many prompts have started at the current position
 function esc(s){
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+function inlineMd(s){  // input is already HTML-escaped
+  return s
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
+    .replace(/\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/(^|[^"=\]])(https?:\/\/[^\s<>()"]+[^\s<>()".,;:!?'])/g,
+      '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+}
+function mdBlock(seg){  // escaped text outside code fences: tables, headings, inline marks
+  const lines = seg.split('\n');
+  const isRow = l => /^\s*\|.*\|\s*$/.test(l);
+  const cells = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => inlineMd(c.trim()));
+  const out = [];
+  let i = 0;
+  while (i < lines.length){
+    if (isRow(lines[i]) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])){
+      let t = '<table class="mdtable"><thead><tr>' +
+        cells(lines[i]).map(c => '<th>' + c + '</th>').join('') + '</tr></thead><tbody>';
+      i += 2;
+      while (i < lines.length && isRow(lines[i])){
+        t += '<tr>' + cells(lines[i]).map(c => '<td>' + c + '</td>').join('') + '</tr>';
+        i++;
+      }
+      out.push(t + '</tbody></table>');
+      continue;
+    }
+    const h = lines[i].match(/^(#{1,4})\s+(.*)$/);
+    out.push(h ? '<b>' + inlineMd(h[2]) + '</b>' : inlineMd(lines[i]));
+    i++;
+  }
+  return out.join('\n');
+}
 function md(s){
-  // minimal markdown: fenced code, inline code, bold — enough to look right in a terminal
+  // markdown subset CC actually renders in the terminal: fenced code, inline code,
+  // bold, headings, pipe tables, and clickable links
   const parts = s.split(/```/);
   let out = '';
   for (let i = 0; i < parts.length; i++){
@@ -174,9 +220,7 @@ function md(s){
       const body = parts[i].replace(/^[\w+-]*\n/,'');
       out += '<div class="codeblock">' + esc(body.replace(/\n$/,'')) + '</div>';
     } else {
-      out += esc(parts[i])
-        .replace(/`([^`\n]+)`/g,'<code>$1</code>')
-        .replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>');
+      out += mdBlock(esc(parts[i]));
     }
   }
   return out;
@@ -195,14 +239,65 @@ function addWelcome(){
     '  cwd: ' + esc(META.cwd);
   scrollEl.appendChild(d);
 }
+let appendTarget = null;  // when set, new lines go inside a tool group instead of the scrollback
 function el(cls, html){
   const d = document.createElement('div');
   d.className = cls;
   d.innerHTML = html;
-  scrollEl.appendChild(d);
+  (appendTarget || scrollEl).appendChild(d);
   scrollDown();
   return d;
 }
+
+/* ---------- collapsible tool groups (CC's "Read 2 files, ran 1 shell command") ---------- */
+let curGroup = null, pendingCollapse = [];
+function toolGroupSummary(evs){
+  const counts = new Map();
+  for (const ev of evs){
+    const n = ev.name;
+    let cat;
+    if (n === 'Read') cat = 'read|# file|# files';
+    else if (n === 'Bash') cat = 'ran|# shell command|# shell commands';
+    else if (n === 'Edit' || n === 'MultiEdit' || n === 'NotebookEdit') cat = 'edited|# file|# files';
+    else if (n === 'Write') cat = 'wrote|# file|# files';
+    else if (n === 'Grep' || n === 'Glob') cat = 'ran|# search|# searches';
+    else if (n === 'WebSearch' || n === 'WebFetch') cat = 'searched|the web # time|the web # times';
+    else cat = 'made|# other tool call|# other tool calls';
+    counts.set(cat, (counts.get(cat) || 0) + 1);
+  }
+  const parts = [...counts.entries()].map(([cat, c]) => {
+    const [verb, one, many] = cat.split('|');
+    return verb + ' ' + (c === 1 ? one : many).replace('#', c);
+  });
+  const s = parts.join(', ');
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+function newGroup(){
+  const g = document.createElement('div');
+  g.className = 'tgroup';
+  g.innerHTML = '<div class="tghead" style="display:none"><span class="chev">▸</span> ' +
+    '<span class="gsum"></span> <span class="more">(click to expand)</span></div><div class="tgbody"></div>';
+  scrollEl.appendChild(g);
+  return g;
+}
+function closeGroup(){
+  if (curGroup && curGroup.evs.length >= 2){
+    curGroup.el.querySelector('.gsum').textContent = toolGroupSummary(curGroup.evs);
+    pendingCollapse.push(curGroup.el);
+  }
+  curGroup = null;
+}
+function collapsePending(){
+  for (const g of pendingCollapse){
+    g.querySelector('.tghead').style.display = '';
+    g.classList.add('collapsed');
+  }
+  pendingCollapse = [];
+}
+scrollEl.addEventListener('click', e => {
+  const h = e.target.closest('.tghead');
+  if (h) h.parentElement.classList.toggle('collapsed');
+});
 function addUser(text){ return el('line user', '&gt; ' + esc(text)); }
 function addEntry(bulletCls, bullet, bodyHtml, extraCls){
   const d = el('entry' + (extraCls ? ' ' + extraCls : ''),
@@ -227,6 +322,31 @@ function toolResultHtml(ev){
     out += '<div class="diffblock">' + rows + dmore + '</div>';
   }
   return out;
+}
+function renderRange(a, b){
+  // past events render with tool runs (2+) collapsed, like CC's scrollback
+  let i = a;
+  while (i < b){
+    if (EVENTS[i].k === 'tool'){
+      let j = i;
+      while (j < b && EVENTS[j].k === 'tool') j++;
+      if (j - i >= 2){
+        const g = newGroup();
+        g.querySelector('.gsum').textContent = toolGroupSummary(EVENTS.slice(i, j));
+        g.querySelector('.tghead').style.display = '';
+        g.classList.add('collapsed');
+        appendTarget = g.querySelector('.tgbody');
+        for (let k = i; k < j; k++) renderFinal(EVENTS[k]);
+        appendTarget = null;
+      } else {
+        renderFinal(EVENTS[i]);
+      }
+      i = j;
+    } else {
+      renderFinal(EVENTS[i]);
+      i++;
+    }
+  }
 }
 function renderFinal(ev){
   if (ev.k === 'user') addUser(ev.text);
@@ -317,6 +437,8 @@ async function revealText(bodyEl, text, total, token){
 async function animate(ev, prev, token){
   // pause between events, matching the recording's rhythm (capped so demos stay snappy)
   const realGap = (prev && ev.ts && prev.ts) ? Math.max(0, ev.ts - prev.ts) : 0;
+  if (ev.k !== 'tool') closeGroup();
+  if (ev.k === 'user') collapsePending();  // turn over → fold the last turn's tool runs
   if (ev.k === 'user'){
     if (prefilledAt !== idx && prev) await wait(Math.min(realGap, 1.2) * 1000, token);
     await typeUser(ev, token);
@@ -350,8 +472,12 @@ async function animate(ev, prev, token){
     await revealText(body, 'Thinking…\n' + ev.text, 1100, token);
     await wait(200, token);
   } else if (ev.k === 'tool'){
+    if (!curGroup) curGroup = {el: newGroup(), evs: []};
+    curGroup.evs.push(ev);
+    appendTarget = curGroup.el.querySelector('.tgbody');
     const d = addEntry('run', '●',
       '<span class="toolhead">' + esc(ev.summary) + '</span><div class="tres">└  <span class="more">Running…</span></div>');
+    appendTarget = null;
     await wait(Math.min(ev.dur || 1, 2.5) * 1000, token);
     d.querySelector('.bullet').className = 'bullet ' + (ev.err ? 'err' : 'ok');
     d.querySelector('.tres').outerHTML = toolResultHtml(ev);
@@ -375,6 +501,8 @@ async function runLoop(){
       idx++;
       updateUI();
     }
+    closeGroup();
+    collapsePending();
     typedEl.textContent = '';
     toggleEl.textContent = '▶';
     playing = false;
@@ -389,10 +517,13 @@ function seekTo(n, keepPlaying){
   runId++;
   spinnerOff();
   prefilledAt = -1;
+  appendTarget = null;
+  curGroup = null;
+  pendingCollapse = [];
   typedEl.textContent = '';
   scrollEl.innerHTML = '';
   addWelcome();
-  for (let i = 0; i < n; i++) renderFinal(EVENTS[i]);
+  renderRange(0, n);
   idx = n;
   updateUI();
   scrollDown(true);
