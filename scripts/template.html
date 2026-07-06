@@ -64,6 +64,11 @@
   .tres{color:var(--dim);margin-top:2px;white-space:pre-wrap;overflow-wrap:anywhere}
   .tres.errtext{color:var(--red)}
   .tres .more{color:var(--dimmer)}
+  .diffblock{margin:2px 0 2px 3ch;border-radius:4px;overflow:hidden}
+  .dline{white-space:pre-wrap;overflow-wrap:anywhere;padding:0 8px}
+  .dline.add{background:rgba(63,185,80,.16);color:#a5d6a7}
+  .dline.del{background:rgba(248,81,73,.14);color:#e2a49e}
+  .dmore{color:var(--dimmer);padding:0 8px}
   .intline{color:var(--red)}
   .teamline{color:#8fb4d9}
   .teamline .who{font-weight:600}
@@ -205,12 +210,23 @@ function addEntry(bulletCls, bullet, bodyHtml, extraCls){
   return d;
 }
 function toolResultHtml(ev){
-  if (!ev.res && !ev.err) return '<div class="tres">└  (no output)</div>';
-  const cls = ev.err ? 'tres errtext' : 'tres';
-  let txt = esc(ev.res || (ev.err ? 'Error' : ''));
-  txt = txt.split('\n').map((l,i) => i === 0 ? '└  ' + l : '   ' + l).join('\n');
-  let more = ev.hidden ? '\n   <span class="more">… +' + ev.hidden + ' lines (ctrl+o to expand)</span>' : '';
-  return '<div class="' + cls + '">' + txt + more + '</div>';
+  let out;
+  if (!ev.res && !ev.err && !ev.diff){
+    out = '<div class="tres">└  (no output)</div>';
+  } else {
+    const cls = ev.err ? 'tres errtext' : 'tres';
+    let txt = esc(ev.res || (ev.err ? 'Error' : ''));
+    txt = txt.split('\n').map((l,i) => i === 0 ? '└  ' + l : '   ' + l).join('\n');
+    let more = ev.hidden ? '\n   <span class="more">… +' + ev.hidden + ' lines (ctrl+o to expand)</span>' : '';
+    out = '<div class="' + cls + '">' + txt + more + '</div>';
+  }
+  if (ev.diff && ev.diff.length){
+    const rows = ev.diff.map(d =>
+      '<div class="dline ' + (d[0] === '+' ? 'add' : 'del') + '">' + esc(d[0] + ' ' + d[1]) + '</div>').join('');
+    const dmore = ev.dhidden ? '<div class="dmore">… +' + ev.dhidden + ' more lines</div>' : '';
+    out += '<div class="diffblock">' + rows + dmore + '</div>';
+  }
+  return out;
 }
 function renderFinal(ev){
   if (ev.k === 'user') addUser(ev.text);

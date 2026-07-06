@@ -14,6 +14,7 @@ Usage:
 """
 
 import argparse
+import difflib
 import glob
 import html
 import json
@@ -26,6 +27,7 @@ PROJECTS_DIR = os.path.expanduser(os.environ.get("CLAUDE_PROJECTS_DIR", "~/.clau
 
 MAX_RESULT_LINES = 10
 MAX_RESULT_CHARS = 1500
+MAX_DIFF_LINES = 14
 MAX_THINKING_CHARS = 600
 MAX_TEXT_CHARS = 6000
 
@@ -160,6 +162,47 @@ def truncate_block(text, max_lines=MAX_RESULT_LINES, max_chars=MAX_RESULT_CHARS)
         hidden = len(lines) - max_lines
         lines = lines[:max_lines]
     return "\n".join(lines), hidden
+
+
+def diff_lines(old, new):
+    """Changed lines between two strings as [sign, text] pairs (like CC's edit view)."""
+    a, b = old.split("\n"), new.split("\n")
+    out = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b).get_opcodes():
+        if tag in ("replace", "delete"):
+            out += [["-", clean_text(l)[:160]] for l in a[i1:i2]]
+        if tag in ("replace", "insert"):
+            out += [["+", clean_text(l)[:160]] for l in b[j1:j2]]
+    return out
+
+
+def attach_diff(ev, name, inp, cwd):
+    """For file-editing tools, capture a red/green diff from the tool input."""
+    if not isinstance(inp, dict):
+        return
+    dl = []
+    if name == "Edit":
+        dl = diff_lines(inp.get("old_string") or "", inp.get("new_string") or "")
+    elif name == "MultiEdit":
+        for e in inp.get("edits") or []:
+            if isinstance(e, dict):
+                dl += diff_lines(e.get("old_string") or "", e.get("new_string") or "")
+    elif name in ("Write", "NotebookEdit"):
+        content = inp.get("content") or inp.get("new_source") or ""
+        if content:
+            dl = [["+", clean_text(l)[:160]] for l in content.split("\n")]
+    if not dl:
+        return
+    adds = sum(1 for d in dl if d[0] == "+")
+    rems = len(dl) - adds
+    path = short_path(inp.get("file_path") or inp.get("notebook_path") or "file", cwd)
+    if name == "Write":
+        ev["dsum"] = f"Wrote {adds} line{'s' if adds != 1 else ''} to {path}"
+    else:
+        ev["dsum"] = (f"Updated {path} with {adds} addition{'s' if adds != 1 else ''}"
+                      f" and {rems} removal{'s' if rems != 1 else ''}")
+    ev["diff"] = dl[:MAX_DIFF_LINES]
+    ev["dhidden"] = max(0, len(dl) - MAX_DIFF_LINES)
 
 
 def result_text(content):
@@ -301,6 +344,12 @@ def parse_session(path):
                                 ev["err"] = bool(b.get("is_error"))
                                 if ts and ev["ts"]:
                                     ev["dur"] = max(0, ts - ev["ts"])
+                                if ev["err"]:
+                                    # failed edits show the error, not a diff of what didn't happen
+                                    ev.pop("diff", None), ev.pop("dhidden", None), ev.pop("dsum", None)
+                                elif ev.get("diff"):
+                                    ev["res"] = ev.pop("dsum", "Updated file")
+                                    ev["hidden"] = 0
                         elif b.get("type") == "text":
                             for e in user_text_events(b.get("text", ""), ts):
                                 # block texts are usually harness-injected; only keep
@@ -327,6 +376,7 @@ def parse_session(path):
                         ev = {"k": "tool", "name": b.get("name", "Tool"),
                               "summary": tool_summary(b.get("name", ""), b.get("input"), meta["cwd"]),
                               "res": "", "hidden": 0, "err": False, "dur": 1.0, "ts": ts}
+                        attach_diff(ev, b.get("name", ""), b.get("input"), meta["cwd"])
                         tools_by_id[b.get("id")] = ev
                         events.append(ev)
 

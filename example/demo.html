@@ -64,6 +64,11 @@
   .tres{color:var(--dim);margin-top:2px;white-space:pre-wrap;overflow-wrap:anywhere}
   .tres.errtext{color:var(--red)}
   .tres .more{color:var(--dimmer)}
+  .diffblock{margin:2px 0 2px 3ch;border-radius:4px;overflow:hidden}
+  .dline{white-space:pre-wrap;overflow-wrap:anywhere;padding:0 8px}
+  .dline.add{background:rgba(63,185,80,.16);color:#a5d6a7}
+  .dline.del{background:rgba(248,81,73,.14);color:#e2a49e}
+  .dmore{color:var(--dimmer);padding:0 8px}
   .intline{color:var(--red)}
   .teamline{color:#8fb4d9}
   .teamline .who{font-weight:600}
@@ -133,7 +138,7 @@
 
 <script>
 const META = {"cwd":"/home/demo/projects/snake-game","model":"claude-fable-5","branch":"main","sessionId":"demo-session","started":"Jul 06, 2026","title":"claude-session-replay demo"};
-const EVENTS = [{"k":"user","text":"The snake can pass through its own tail when it grows past 10 segments. Can you find and fix the bug?","ts":1783350600.0},{"k":"a","text":"I'll look at the collision logic first to see how self-collision is detected.","ts":1783350604.0},{"k":"tool","name":"Grep","summary":"Search(pattern: \"collision\", path: src)","res":"src/game.js:88:function checkCollision(head, body) {\nsrc/game.js:112:  if (checkCollision(head, snake.slice(0, 10))) {\nsrc/game.js:140:// wall collision handled in update()","hidden":0,"err":false,"dur":2.0,"ts":1783350606.0},{"k":"tool","name":"Read","summary":"Read(src/game.js)","res":"   108  function update() {\n   109    const head = nextHead(snake, direction);\n   110    // BUG: only checks the first 10 segments\n   111    if (checkCollision(head, snake.slice(0, 10))) {\n   112      gameOver();\n   113      return;\n   114    }\n   115    snake.unshift(head);","hidden":0,"err":false,"dur":2.0,"ts":1783350613.0},{"k":"a","text":"Found it — `update()` only tests the head against the **first 10 segments** (`snake.slice(0, 10)`), so any segment past index 9 is invisible to collision detection. The fix is to check the whole body.","ts":1783350622.0},{"k":"tool","name":"Edit","summary":"Update(src/game.js)","res":"Updated src/game.js:\n    111    if (checkCollision(head, snake)) {","hidden":0,"err":false,"dur":2.0,"ts":1783350625.0},{"k":"tool","name":"Bash","summary":"Bash(npm test -- --grep collision)","res":"> snake-game@1.0.0 test\n\n  collision\n    ✓ detects wall collision (3ms)\n    ✓ detects self collision at segment 3 (2ms)\n    ✓ detects self collision at segment 25 (2ms)\n\n  3 passing (41ms)","hidden":0,"err":false,"dur":7.0,"ts":1783350631.0},{"k":"a","text":"Fixed and verified. The bug was in `update()` — collision detection capped the body check at 10 segments. It now checks the entire snake, and all three collision tests pass, including a new case at segment 25.","ts":1783350644.0}];
+const EVENTS = [{"k":"user","text":"The snake can pass through its own tail when it grows past 10 segments. Can you find and fix the bug?","ts":1783350600.0},{"k":"a","text":"I'll look at the collision logic first to see how self-collision is detected.","ts":1783350604.0},{"k":"tool","name":"Grep","summary":"Search(pattern: \"collision\", path: src)","res":"src/game.js:88:function checkCollision(head, body) {\nsrc/game.js:112:  if (checkCollision(head, snake.slice(0, 10))) {\nsrc/game.js:140:// wall collision handled in update()","hidden":0,"err":false,"dur":2.0,"ts":1783350606.0},{"k":"tool","name":"Read","summary":"Read(src/game.js)","res":"   108  function update() {\n   109    const head = nextHead(snake, direction);\n   110    // BUG: only checks the first 10 segments\n   111    if (checkCollision(head, snake.slice(0, 10))) {\n   112      gameOver();\n   113      return;\n   114    }\n   115    snake.unshift(head);","hidden":0,"err":false,"dur":2.0,"ts":1783350613.0},{"k":"a","text":"Found it — `update()` only tests the head against the **first 10 segments** (`snake.slice(0, 10)`), so any segment past index 9 is invisible to collision detection. The fix is to check the whole body.","ts":1783350622.0},{"k":"tool","name":"Edit","summary":"Update(src/game.js)","res":"Updated src/game.js with 1 addition and 1 removal","hidden":0,"err":false,"dur":2.0,"ts":1783350625.0,"diff":[["-","  if (checkCollision(head, snake.slice(0, 10))) {"],["+","  if (checkCollision(head, snake)) {"]],"dhidden":0},{"k":"tool","name":"Bash","summary":"Bash(npm test -- --grep collision)","res":"> snake-game@1.0.0 test\n\n  collision\n    ✓ detects wall collision (3ms)\n    ✓ detects self collision at segment 3 (2ms)\n    ✓ detects self collision at segment 25 (2ms)\n\n  3 passing (41ms)","hidden":0,"err":false,"dur":7.0,"ts":1783350631.0},{"k":"a","text":"Fixed and verified. The bug was in `update()` — collision detection capped the body check at 10 segments. It now checks the entire snake, and all three collision tests pass, including a new case at segment 25.","ts":1783350644.0}];
 
 const $ = id => document.getElementById(id);
 const scrollEl = $('scroll'), typedEl = $('typed'), spinnerEl = $('spinner');
@@ -205,12 +210,23 @@ function addEntry(bulletCls, bullet, bodyHtml, extraCls){
   return d;
 }
 function toolResultHtml(ev){
-  if (!ev.res && !ev.err) return '<div class="tres">└  (no output)</div>';
-  const cls = ev.err ? 'tres errtext' : 'tres';
-  let txt = esc(ev.res || (ev.err ? 'Error' : ''));
-  txt = txt.split('\n').map((l,i) => i === 0 ? '└  ' + l : '   ' + l).join('\n');
-  let more = ev.hidden ? '\n   <span class="more">… +' + ev.hidden + ' lines (ctrl+o to expand)</span>' : '';
-  return '<div class="' + cls + '">' + txt + more + '</div>';
+  let out;
+  if (!ev.res && !ev.err && !ev.diff){
+    out = '<div class="tres">└  (no output)</div>';
+  } else {
+    const cls = ev.err ? 'tres errtext' : 'tres';
+    let txt = esc(ev.res || (ev.err ? 'Error' : ''));
+    txt = txt.split('\n').map((l,i) => i === 0 ? '└  ' + l : '   ' + l).join('\n');
+    let more = ev.hidden ? '\n   <span class="more">… +' + ev.hidden + ' lines (ctrl+o to expand)</span>' : '';
+    out = '<div class="' + cls + '">' + txt + more + '</div>';
+  }
+  if (ev.diff && ev.diff.length){
+    const rows = ev.diff.map(d =>
+      '<div class="dline ' + (d[0] === '+' ? 'add' : 'del') + '">' + esc(d[0] + ' ' + d[1]) + '</div>').join('');
+    const dmore = ev.dhidden ? '<div class="dmore">… +' + ev.dhidden + ' more lines</div>' : '';
+    out += '<div class="diffblock">' + rows + dmore + '</div>';
+  }
+  return out;
 }
 function renderFinal(ev){
   if (ev.k === 'user') addUser(ev.text);
