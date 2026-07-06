@@ -185,6 +185,9 @@ def clean_text(s):
 
 COMMAND_RE = re.compile(r"<command-name>(.*?)</command-name>", re.S)
 COMMAND_ARGS_RE = re.compile(r"<command-args>(.*?)</command-args>", re.S)
+BASH_INPUT_RE = re.compile(r"<bash-input>(.*?)</bash-input>", re.S)
+BASH_STDOUT_RE = re.compile(r"<bash-stdout>(.*?)</bash-stdout>", re.S)
+BASH_STDERR_RE = re.compile(r"<bash-stderr>(.*?)</bash-stderr>", re.S)
 
 
 def parse_session(path):
@@ -230,6 +233,20 @@ def parse_session(path):
                 if isinstance(content, str):
                     text = content
                     if "<local-command-stdout>" in text or "<local-command-caveat>" in text:
+                        continue
+                    # `!` shell passthrough: the command is a user event, its output a dim block
+                    m = BASH_INPUT_RE.search(text)
+                    if m:
+                        events.append({"k": "user", "text": "! " + m.group(1).strip(), "ts": ts})
+                        continue
+                    if "<bash-stdout>" in text or "<bash-stderr>" in text:
+                        so = BASH_STDOUT_RE.search(text)
+                        se = BASH_STDERR_RE.search(text)
+                        parts = [x.group(1).strip() for x in (so, se) if x and x.group(1).strip()]
+                        if parts:
+                            res, hidden = truncate_block("\n".join(parts))
+                            err = bool(se and se.group(1).strip()) and not (so and so.group(1).strip())
+                            events.append({"k": "sh", "res": res, "hidden": hidden, "err": err, "ts": ts})
                         continue
                     m = COMMAND_RE.search(text)
                     if m:

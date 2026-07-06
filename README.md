@@ -46,13 +46,21 @@ it, commit it, or host it as static content.
 
 ## Player controls
 
+Navigation is **by user prompt** — the slider snaps to prompts (one tick per prompt)
+and the counter reads `prompt 3/10`, so skipping to "the part where I asked X" is one
+click.
+
 | Control | Action |
 |---|---|
 | Space / ❚❚ button | play / pause |
+| ‹ / › buttons, ← / → | previous / next user prompt |
+| slider | jump to prompt N |
 | `s` / speed button | cycle 1× → 2× → 4× → 8× |
-| slider, ← / → | seek by event |
 | `r` | restart |
-| `e` | skip to end |
+| `e` / » | skip to end |
+
+The window fills the browser and the font scales with screen size, so a fullscreened
+browser on a projector is presentation-ready as-is.
 
 Long waits from the original recording are compressed so the demo stays snappy, but
 the status spinner still shows the *real* elapsed time from the session, so the
